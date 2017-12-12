@@ -1,82 +1,109 @@
 using Uno;
+using Uno.IO;
 using Uno.Collections;
+
 using Fuse;
 using Fuse.Scripting;
 using Fuse.Reactive;
-using Bolav.ForeignHelpers;
 
-public class SQLiteDb : NativeModule
+public class SQLiteDb
 {
-	string filename;
-	extern (CIL) string db;
-	extern (iOS) IntPtr db;
-	extern (Android) Java.Object db;
-	extern (Uno) int db;
-	public SQLiteDb(string filename) {
-		this.filename = filename;
-		db = SQLiteImpl.OpenImpl(filename);
+    string _filename;
+    extern (CIL) string db;
+    extern (iOS) IntPtr db;
+    extern (Android) Java.Object db;
+    extern (Uno) int db;
 
-		AddMember(new NativeFunction("close", (NativeCallback)Close));
-		AddMember(new NativeFunction("prepare", (NativeCallback)Prepare));
-		AddMember(new NativeFunction("execute", (NativeCallback)Execute));
-		AddMember(new NativeFunction("query", (NativeCallback)Query));
-	}
+    SQLiteDb(string filename)
+    {
+        _filename = filename;
+        db = SQLiteImpl.OpenImpl(_filename);
+    }
 
-	object Close(Context c, object[] args)
-	{
-		SQLiteImpl.CloseImpl(db);
-		return null;
-	}
+    public void Close()
+    {
+        SQLiteImpl.CloseImpl(db);
+    }
 
-	object Prepare(Context c, object[] args) {
-		var statement = args[0] as string;
-		var mod = new SQLiteStatement(db, statement);
-		return mod.EvaluateExports(c, null);
-	}
+    public void Execute(string statement, string[] param)
+    {
+        SQLiteImpl.ExecImpl(db, statement, param);
+    }
 
-	object Execute(Context c, object[] args) {
-		var statement = args[0] as string;
-		var param_len = args.Length - 1;
+    List<Dictionary<string,string>> Query(string statement, string[] param)
+    {
+        if (defined(CIL))
+        {
+            return SQLiteImpl.QueryImpl(db, statement, param);
+        }
+        else
+        {
+            var res = QueryRes();
+            SQLiteImpl.QueryImpl(res, db, statement, param);
+            return res;
+        }
+    }
 
-		string[] param = new string[param_len];
-		for (var i=0; i < param_len; i++) {
-			param[i] = args[i+1].ToString();
-		}
-		SQLiteImpl.ExecImpl(db, statement, param);
-		return null;
-	}
+    public static object Open (string filename)
+    {
+        var filepath = Path.Combine(Directory.GetUserDirectory(UserDirectory.Data), filename);
+        return new SQLiteDb(filepath);
+    }
 
-	// TODO: QueryCursor
-	// TODO: QueryAsync
+    public static object OpenFromBundle (string filename)
+    {
+        var filepath = Path.Combine(Directory.GetUserDirectory(UserDirectory.Data), filename);
 
-	object Query(Context context, object[] args) {
-		var statement = args[0] as string;
-		var param_len = args.Length - 1;
+        if (File.Exists(filepath))
+        {
+            return Open(filepath);
+        }
 
-		string[] param = new string[param_len];
-		for (var j=0; j < param_len; j++) {
-			param[j] = args[j+1].ToString();
-		}
-		var jslist = new JSList(context);
+        BundleFile found = null;
 
-		if defined(!CIL) {
-			SQLiteImpl.QueryImpl(jslist, db, statement, param);
-		}
+        foreach (var f in Uno.IO.Bundle.AllFiles)
+        {
+            if (f.SourcePath == filename)
+            {
+                found = f;
+                break;
+            }
+        }
+        if (found != null)
+        {
+            // http://stackoverflow.com/questions/230128/how-do-i-copy-the-contents-of-one-stream-to-another
+            var input = found.OpenRead();
+            var output = File.OpenWrite(filepath);
+            byte[] buffer = new byte[1024];
+            int read;
+            while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                output.Write (buffer, 0, read);
+            }
+            input.Close();
+            output.Close();
+        }
+        else
+        {
+            debug_log filename + " not found in bundle";
+        }
+        return Open(filepath);
+    }
+}
 
-		if defined(CIL) {
-			var result = SQLiteImpl.QueryImpl(db, statement, param);
-			int i = 0;
-			foreach (var row in result) {
-				var jsdict = jslist.NewDictRow();
-				foreach (var pair in row) {
-					string key = pair.Key as string;
-					string val = pair.Value as string;
-					jsdict.SetKeyVal(key,val);
-				}
-				i++;
-			}
-		}
-		return jslist.GetScriptingArray();
-	}
+class QueryRes
+{
+    List<Dictionary<string,string>> _result = new List<Dictionary<string,string>>();
+    Dictionary<string,string> _wip = new Dictionary<string,string>();
 
+    public void SetElem(string key, string val)
+    {
+        _wip[key] = val;
+    }
+
+    public void PushRow()
+    {
+        _result.Add(_wip);
+        _wip = new Dictionary<string,string>();
+    }
 }

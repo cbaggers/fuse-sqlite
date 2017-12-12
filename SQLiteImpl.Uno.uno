@@ -1,4 +1,3 @@
-using Bolav.ForeignHelpers;
 using Uno.Compiler.ExportTargetInterop;
 // http://www.appcoda.com/sqlite-database-ios-app-tutorial/
 
